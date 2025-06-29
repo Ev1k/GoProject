@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Auth App</title>
+    <title>Locks</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -33,7 +33,139 @@
         </div>
     </div>
 </div>
-    
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-8 mx-auto">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h3>Управление замками TTLock</h3>
+                    </div>
+                    <div class="card-body">
+                        <!-- Кнопка привязки аккаунта -->
+                        <button id="connectTTLock" class="btn btn-success mb-4">
+                            Привязать аккаунт TTLock
+                        </button>
+
+                        <!-- Список замков -->
+                        <div id="locksContainer" class="d-none">
+                            <h4 class="mb-3">Мои замки</h4>
+                            <div id="locksList" class="list-group mb-4"></div>
+                        </div>
+
+
+                        <div class="mt-4">
+                            <a href="/locks" class="btn btn-info">
+                                <i class="fas fa-list"></i> Список замков
+                            </a>
+                        </div>
+
+                        {{if eq .User.Role "admin"}}
+                        <div class="mt-4 d-flex gap-2 flex-wrap" style="justify-content: center">
+                            <a href="/ekey" class="btn btn-warning">
+                                <i class="fas fa-key"></i> Send EKey
+                            </a>
+                            <a href="/key-period" class="btn btn-info">
+                                <i class="fas fa-clock"></i> Restrict EKey Access
+                            </a>
+                            <a href="/freeze-key" class="btn btn-danger">
+                                <i class="fas fa-lock"></i> Freeze EKey
+                            </a>
+                        </div>
+                        {{end}}
+                        <div class="mt-4">
+                            <a href="/keys" class="btn btn-info">
+                                <i class="fas fa-list"></i> Get EKeys List
+                            </a>
+                        </div>
+
+                        <!-- Статус -->
+<!--                        <div id="ttlockStatus" class="alert alert-info"></div>-->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            // Привязка аккаунта
+            $('#connectTTLock').click(function() {
+                window.location.href = '/ttlock/auth';
+            });
+
+            // Загрузка списка замков
+            function loadLocks() {
+                $.get('/api/ttlock/locks', function(locks) {
+                    if (locks.length > 0) {
+                        $('#locksContainer').removeClass('d-none');
+                        $('#locksList').empty();
+
+                        locks.forEach(function(lock) {
+                            const lockStatus = lock.status === 1 ? 'Закрыт' : 'Открыт';
+                            const batteryLevel = lock.battery > 20 ?
+                                `<span class="text-success">${lock.battery}%</span>` :
+                                `<span class="text-danger">${lock.battery}%</span>`;
+
+                            const lockItem = `
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5>${lock.name}</h5>
+                                <div>Статус: ${lockStatus}</div>
+                                <div>Батарея: ${batteryLevel}</div>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-primary unlock-btn mr-2"
+                                    data-id="${lock.id}">
+                                    Открыть
+                                </button>
+                                <button class="btn btn-sm btn-secondary lock-btn"
+                                    data-id="${lock.id}">
+                                    Закрыть
+                                </button>
+                            </div>
+                        </div>
+                    </div>`;
+                            $('#locksList').append(lockItem);
+                        });
+
+                        // Обработчики кнопок
+                        $('.unlock-btn').click(function() {
+                            const lockId = $(this).data('id');
+                            controlLock(lockId, '1');
+                        });
+
+                        $('.lock-btn').click(function() {
+                            const lockId = $(this).data('id');
+                            controlLock(lockId, '2');
+                        });
+                    } else {
+                        $('#ttlockStatus').html('Нет доступных замков. Привяжите аккаунт TTLock.');
+                    }
+                }).fail(function() {
+                    $('#ttlockStatus').html('Ошибка загрузки замков. Проверьте подключение.');
+                });
+            }
+
+            // Управление замком
+            function controlLock(lockId, action) {
+                $.post('/api/ttlock/control', {
+                    lockId: lockId,
+                    action: action
+                }, function() {
+                    $('#ttlockStatus').html('Команда отправлена успешно');
+                    setTimeout(loadLocks, 2000); // Обновляем статус через 2 сек
+                }).fail(function() {
+                    $('#ttlockStatus').html('Ошибка отправки команды');
+                });
+            }
+
+            // Проверяем статус при загрузке
+            loadLocks();
+        });
+    </script>
+
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>

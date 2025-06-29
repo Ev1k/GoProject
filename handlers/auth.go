@@ -3,6 +3,7 @@ package handlers
 import (
 	"GoProject/db"
 	"GoProject/models"
+	"GoProject/ttlock"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,6 +159,23 @@ func RegisterAPIHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ttlockClient := ttlock.NewClient()
+
+	ttUsername := strings.ToLower(strings.ReplaceAll(req.Email, "@", "_"))
+	ttUsername = regexp.MustCompile(`[^a-z0-9_]`).ReplaceAllString(ttUsername, "")
+
+	ttPassword := req.Password
+
+	registeredUsername, err := ttlockClient.RegisterUser(ttUsername, ttPassword)
+	if err != nil {
+		log.Printf("TTLock registration failed: %v", err)
+	} else {
+		log.Printf("User registered in TTLock with username: %s", registeredUsername)
+		if err := db.SaveTTLockUsername(user.ID, registeredUsername); err != nil {
+			log.Printf("Failed to save TTLock username: %v", err)
+		}
+	}
+
 	respondWithJSON(w, http.StatusCreated, map[string]string{
 		"message": "User registered successfully",
 		"role":    string(user.Role),
@@ -196,6 +216,24 @@ func LoginAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	setTokenCookie(w, tokenString)
+
+	ttlockUsername, err := db.GetTTLockUsername(user.ID)
+	if err != nil {
+		log.Printf("Failed to get TTLock username: %v", err)
+		respondWithJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"redirect": "/",
+		})
+		return
+	}
+
+	ttClient := ttlock.NewClient()
+	_, err = ttClient.Authenticate(ttlockUsername, creds.Password)
+	if err != nil {
+		log.Printf("TTLock authentication failed: %v", err)
+	} else {
+		log.Printf("Successfully authenticated with TTLock")
+	}
 
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"success":  true,

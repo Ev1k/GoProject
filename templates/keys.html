@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Locks</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 40px;
+            padding-bottom: 40px;
+            background-color: #f5f5f5;
+        }
+        .form-auth {
+            max-width: 330px;
+            padding: 15px;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body class="text-center">
+<div class="container">
+
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-10 mx-auto">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h3>Lock Keys</h3>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" class="mb-4">
+                            <div class="input-group">
+                                <input type="number" class="form-control" name="lockId" placeholder="Enter Lock ID" required>
+                                <button type="submit" class="btn btn-primary">Get Keys</button>
+                            </div>
+                        </form>
+
+                        {{if .Error}}
+                        <div class="alert alert-danger">{{.Error}}</div>
+                        {{end}}
+
+                        {{if .Keys}}
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead class="thead-dark">
+                                <tr>
+                                    <th>Key ID</th>
+                                    <th>Key Name</th>
+                                    <th>Username</th>
+                                    <th>Sender</th>
+                                    <th>Valid From</th>
+                                    <th>Valid To</th>
+                                    <th>Status</th>
+                                    <th>Remarks</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {{range .Keys}}
+                                <tr>
+                                    <td>{{.KeyID}}</td>
+                                    <td>{{.KeyName}}</td>
+                                    <td>{{.Username}}</td>
+                                    <td>{{.SenderUsername}}</td>
+                                    <td>{{formatUnix .StartDate}}</td>
+                                    <td>{{formatUnix .EndDate}}</td>
+                                    <td>
+                                        {{if eq .KeyStatus "110401"}}
+                                        <span class="badge bg-success">Active</span>
+                                        {{else}}
+                                        <span class="badge bg-secondary">{{.KeyStatus}}</span>
+                                        {{end}}
+                                    </td>
+                                    <td>{{.Remarks}}</td>
+                                </tr>
+                                {{end}}
+                                </tbody>
+                            </table>
+                        </div>
+                        {{else if .LockID}}
+                        <div class="alert alert-info">No keys found for lock ID {{.LockID}}</div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Можно добавить JavaScript для динамической загрузки
+        // без перезагрузки страницы, если нужно
+    </script>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

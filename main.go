@@ -3,17 +3,27 @@ package main
 import (
 	"GoProject/db"
 	"GoProject/handlers"
+	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
+// Функция для форматирования Unix времени
+func FormatUnix(t int64) string {
+	if t == 0 {
+		return "N/A"
+	}
+	return time.Unix(t, 0).Format("2006-01-02 15:04")
+}
+
 func main() {
-	// Загрузка переменных окружения
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
@@ -23,6 +33,17 @@ func main() {
 	db.InitDB()
 	defer db.CloseDB()
 
+	tmpl := template.New("").Funcs(template.FuncMap{
+		"formatUnix": FormatUnix, // регистр важен - должен соответствовать вызову в шаблоне
+	})
+
+	_, err = tmpl.ParseGlob("templates/*.html")
+	if err != nil {
+		log.Fatalf("Error parsing templates: %v", err)
+	}
+
+	handlers.InitTemplates(tmpl)
+
 	//fs := http.FileServer(http.Dir("static"))
 	//http.Handle("/static/", http.StripPrefix("/static/", fs))
 
@@ -30,8 +51,17 @@ func main() {
 	http.HandleFunc("/", handlers.HomeHandler)
 	http.HandleFunc("/register", handlers.RegisterHandler)
 	http.HandleFunc("/login", handlers.LoginHandler)
+	http.HandleFunc("/locks", handlers.LocksHandler)
+	//http.HandleFunc("/ttlock/auth", handlers.TTLockAuthHandler)
+	//http.HandleFunc("/ttlock/callback", handlers.TTLockCallbackHandler)
 	http.HandleFunc("/api/register", handlers.RegisterAPIHandler)
 	http.HandleFunc("/api/login", handlers.LoginAPIHandler)
+	http.HandleFunc("/api/ttlock/locks", handlers.LocksHandler)
+	http.HandleFunc("/api/ttlock/control", handlers.TTLockControlHandler)
+	http.HandleFunc("/ekey", handlers.EKeyHandler)
+	http.HandleFunc("/key-period", handlers.KeyPeriodHandler)
+	http.HandleFunc("/freeze-key", handlers.FreezeKeyHandler)
+	http.HandleFunc("/keys", handlers.KeysHandler)
 
 	// Проверка шаблонов
 	_, err = os.Stat("templates")
@@ -51,12 +81,20 @@ func main() {
 	checkTemplate("home.html")
 	checkTemplate("login.html")
 	checkTemplate("register.html")
-
+	checkTemplate("locks.html")
+	checkTemplate("ekey.html")
+	checkTemplate("key_period.html")
+	checkTemplate("freeze_key.html")
+	checkTemplate("keys.html")
+	tmpl.Funcs(template.FuncMap{
+		"formatUnix": FormatUnix,
+	})
 	// Запуск сервера
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 	log.Printf("Server starting on port %s...", port)
+	fmt.Println(time.Now().UnixMilli())
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

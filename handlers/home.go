@@ -9,7 +9,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var tmpl = template.Must(template.ParseGlob("templates/*.html"))
+var tmpl *template.Template
+
+func InitTemplates(t *template.Template) {
+	tmpl = t
+}
 
 func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("token")
@@ -34,6 +38,7 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	err = tmpl.ExecuteTemplate(w, "home.html", map[string]interface{}{
 		"UserID": claims.UserID,
 		"Role":   claims.Role,
+		"User":   claims,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

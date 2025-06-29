@@ -42,6 +42,7 @@ func createTable() {
     name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
+	ttlock_username VARCHAR(200) DEFAULT NULL,
     role VARCHAR(10) NOT NULL DEFAULT 'user',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CHECK (role IN ('admin', 'user'))
@@ -88,7 +89,38 @@ func GetUserByEmail(email string) (models.User, error) {
 		&user.Name,
 		&user.Email,
 		&user.Password,
-		&user.Role, // Добавляем роль
+		&user.Role,
 	)
 	return user, err
+}
+
+func GetTTLockUsername(userID int) (string, error) {
+	var username string
+	err := DB.QueryRow("SELECT ttlock_username FROM users WHERE id = $1", userID).Scan(&username)
+	if err != nil {
+		return "", fmt.Errorf("failed to get TTLock username: %w", err)
+	}
+	return username, nil
+}
+
+func GetUserByTTLockUsername(ttlockUsername string) (models.User, error) {
+	var user models.User
+	query := `SELECT id, name, email, password, role FROM users WHERE ttlock_username = $1`
+	err := DB.QueryRow(query, ttlockUsername).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Email,
+		&user.Password,
+		&user.Role,
+	)
+	return user, err
+}
+
+func SaveTTLockUsername(userID int, ttlockUsername string) error {
+	_, err := DB.Exec(
+		"UPDATE users SET ttlock_username = $1 WHERE id = $2",
+		ttlockUsername,
+		userID,
+	)
+	return err
 }

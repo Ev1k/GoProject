@@ -10,11 +10,12 @@ const (
 )
 
 type User struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Role     Role   `json:"role"`
+	ID             int    `json:"id"`
+	Name           string `json:"name"`
+	Email          string `json:"email"`
+	Password       string `json:"password"`
+	TTLockUsername string `json:"ttlock_username"`
+	Role           Role   `json:"role"`
 }
 
 type Claims struct {
