@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"GoProject/db"
 	"GoProject/models"
 	_ "GoProject/models"
 	"GoProject/ttlock"
@@ -17,13 +18,85 @@ import (
 )
 
 var (
-	ttlockClient *ttlock.TTLockClient
-	clientOnce   sync.Once
+	ttClient   *ttlock.TTLockClient
+	clientOnce sync.Once
 )
 
 func InitTTLockClient() {
 	clientOnce.Do(func() {
-		ttlockClient = &ttlock.TTLockClient{}
+		ttClient = &ttlock.TTLockClient{}
+	})
+}
+
+func InitLockHandler(w http.ResponseWriter, r *http.Request) {
+	if _, err := r.Cookie("token"); err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	tmpl.ExecuteTemplate(w, "init_lock.html", nil)
+}
+
+func InitLockAPIHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	cookie, err := r.Cookie("token")
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, map[string]interface{}{
+			"success": false,
+			"message": "Authentication required",
+		})
+		return
+	}
+
+	claims := &models.Claims{}
+	_, err = jwt.ParseWithClaims(cookie.Value, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, map[string]interface{}{
+			"success": false,
+			"message": "Invalid token",
+		})
+		return
+	}
+	user, err := db.GetUserByID(claims.UserID)
+	accessToken := user.AccessToken
+	if err != nil {
+		respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false,
+			"message": "Failed to get access token",
+		})
+		return
+	}
+
+	var reqData struct {
+		LockData  string `json:"lockData"`
+		LockAlias string `json:"lockAlias"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
+		respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"message": "Invalid request data",
+		})
+		return
+	}
+
+	ttClient := ttlock.NewClient()
+	lockInit, err := ttClient.InitializeLock(accessToken, reqData.LockData, reqData.LockAlias)
+	if err != nil {
+		log.Printf("Failed to initialize lock: %v", err)
+		respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Lock initialized successfully",
+		"lockId":  lockInit.LockId,
+		"keyId":   lockInit.KeyId,
 	})
 }
 
@@ -33,7 +106,7 @@ func LocksHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-
+	InitTTLockClient()
 	claims := &models.Claims{}
 	token, err := jwt.ParseWithClaims(cookie.Value, claims, func(token *jwt.Token) (interface{}, error) {
 		secret := os.Getenv("JWT_SECRET")
@@ -46,7 +119,6 @@ func LocksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttClient := ttlock.NewClient()
 	locks, err := ttClient.ListLocks(1, 20, 0, "", claims.UserID) // без фильтров
 	if err != nil {
 		log.Printf("Failed to get locks: %v", err)
@@ -69,12 +141,19 @@ func LocksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = tmpl.ExecuteTemplate(w, "locks.html", map[string]interface{}{
-		"Locks": locks.List,
-	})
-	if err != nil {
-		log.Printf("Failed to render locks page: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") || r.URL.Query().Get("format") == "json" {
+		// REST API response
+		respondWithJSON(w, http.StatusOK, locks)
+	} else {
+		// HTML response (для обратной совместимости)
+		err = tmpl.ExecuteTemplate(w, "locks.html", map[string]interface{}{
+			"Locks": locks.List,
+		})
+		if err != nil {
+			log.Printf("Failed to render locks page: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
 	}
 }
 
@@ -95,9 +174,6 @@ func TTLockControlHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Action == "2" {
 		passageMode = 2
 	}
-
-	//cyclicConfig := `{"isAllDay":1}` // Весь день
-	//autoUnlock := 1                  // Автоматическое открытие
 
 	err := ttClient.ConfigurePassageMode(req.LockID, passageMode, 2)
 	if err != nil {
@@ -160,13 +236,24 @@ func RecordsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = tmpl.ExecuteTemplate(w, "records.html", map[string]interface{}{
-		"LockID":  lockID,
-		"Records": records.List,
-	})
-	if err != nil {
-		log.Printf("Failed to render records page: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	response := map[string]interface{}{
+		"lockId":   lockID,
+		"list":     records.List,
+		"pageNo":   records.PageNo,
+		"pageSize": records.PageSize,
+		"pages":    records.Pages,
+		"total":    records.Total,
+	}
+
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "application/json") || r.URL.Query().Get("format") == "json" {
+		respondWithJSON(w, http.StatusOK, response)
+	} else {
+		err = tmpl.ExecuteTemplate(w, "records.html", response)
+		if err != nil {
+			log.Printf("Failed to render records page: %v", err)
+			respondWithError(w, http.StatusInternalServerError, "Internal server error")
+		}
 	}
 }
 

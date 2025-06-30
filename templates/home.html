@@ -42,12 +42,10 @@
                         <h3>Управление замками TTLock</h3>
                     </div>
                     <div class="card-body">
-                        <!-- Кнопка привязки аккаунта -->
-                        <button id="connectTTLock" class="btn btn-success mb-4">
+                        <a href="/ttlock/auth" class="btn btn-success mb-4">
                             Привязать аккаунт TTLock
-                        </button>
+                        </a>
 
-                        <!-- Список замков -->
                         <div id="locksContainer" class="d-none">
                             <h4 class="mb-3">Мои замки</h4>
                             <div id="locksList" class="list-group mb-4"></div>
@@ -57,6 +55,10 @@
                         <div class="mt-4">
                             <a href="/locks" class="btn btn-info">
                                 <i class="fas fa-list"></i> Список замков
+                            </a>
+
+                            <a href="/initLock" class="btn btn-primary ">
+                                <i class="fas fa-plus"></i> Add lock
                             </a>
                         </div>
 
@@ -79,8 +81,6 @@
                             </a>
                         </div>
 
-                        <!-- Статус -->
-<!--                        <div id="ttlockStatus" class="alert alert-info"></div>-->
                     </div>
                 </div>
             </div>
@@ -89,12 +89,10 @@
 
     <script>
         $(document).ready(function() {
-            // Привязка аккаунта
             $('#connectTTLock').click(function() {
                 window.location.href = '/ttlock/auth';
             });
 
-            // Загрузка списка замков
             function loadLocks() {
                 $.get('/api/ttlock/locks', function(locks) {
                     if (locks.length > 0) {
@@ -130,7 +128,6 @@
                             $('#locksList').append(lockItem);
                         });
 
-                        // Обработчики кнопок
                         $('.unlock-btn').click(function() {
                             const lockId = $(this).data('id');
                             controlLock(lockId, '1');
@@ -148,20 +145,18 @@
                 });
             }
 
-            // Управление замком
             function controlLock(lockId, action) {
                 $.post('/api/ttlock/control', {
                     lockId: lockId,
                     action: action
                 }, function() {
                     $('#ttlockStatus').html('Команда отправлена успешно');
-                    setTimeout(loadLocks, 2000); // Обновляем статус через 2 сек
+                    setTimeout(loadLocks, 2000);
                 }).fail(function() {
                     $('#ttlockStatus').html('Ошибка отправки команды');
                 });
             }
 
-            // Проверяем статус при загрузке
             loadLocks();
         });
     </script>

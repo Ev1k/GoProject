@@ -2,7 +2,6 @@ package ttlock
 
 import (
 	"GoProject/db"
-	"bytes"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
@@ -33,10 +32,6 @@ func init() {
 	clientID = os.Getenv("CLIENT_ID")
 	clientSecret = os.Getenv("CLIENT_SECRET")
 	fmt.Println(clientID, clientSecret)
-	//fmt.Printf(clientID, clientSecret)
-	//if clientID == "" || clientSecret == "" {
-	//	panic("CLIENT_ID and CLIENT_SECRET must be set in environment variables")
-	//}
 }
 
 type TokenResponse struct {
@@ -86,6 +81,11 @@ type Lock struct {
 	GroupName    string `json:"groupName"`
 	InitDate     int64  `json:"date"`
 	Status       string `json:"-"` // Поле для статуса, не приходит из API
+}
+
+type LockInitialization struct {
+	LockId int
+	KeyId  int
 }
 
 type LocksResponse struct {
@@ -271,7 +271,9 @@ func (c *TTLockClient) Authenticate(username, password string) (*TokenResponse, 
 		}
 		return nil, fmt.Errorf("API error %d: %s", apiError.ErrCode, apiError.ErrMsg)
 	}
-
+	if strings.Contains(string(body), "errmsg") {
+		return nil, fmt.Errorf("invalid account or invalid password")
+	}
 	var tokenResp TokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w, body: %s", err, string(body))
@@ -284,6 +286,73 @@ func (c *TTLockClient) Authenticate(username, password string) (*TokenResponse, 
 
 	log.Printf("Successfully authenticated user: %s", username)
 	return &tokenResp, nil
+}
+
+func (c *TTLockClient) InitializeLock(accessToken, lockData, lockAlias string) (*LockInitialization, error) {
+	params := url.Values{}
+	params.Add("clientId", clientID)
+	params.Add("accessToken", accessToken)
+	params.Add("lockData", lockData)
+	params.Add("date", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	if lockAlias != "" {
+		params.Add("lockAlias", lockAlias)
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		baseURL+"/lock/initialize",
+		strings.NewReader(params.Encode()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	log.Printf("Initialize lock response status: %d, body: %s", resp.StatusCode, string(body))
+
+	var apiError struct {
+		ErrCode     int    `json:"errcode"`
+		ErrMsg      string `json:"errmsg"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &apiError); err == nil && apiError.ErrCode != 0 {
+		return nil, fmt.Errorf("%s", apiError.ErrMsg)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var initResp struct {
+		LockId int `json:"lockId"`
+		KeyId  int `json:"keyId"`
+	}
+	if err := json.Unmarshal(body, &initResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if initResp.LockId == 0 {
+		return nil, fmt.Errorf("invalid lock ID received")
+	}
+
+	return &LockInitialization{
+		LockId: initResp.LockId,
+		KeyId:  initResp.KeyId,
+	}, nil
 }
 
 func (c *TTLockClient) ListLocks(pageNo, pageSize int, groupID int, alias string, userId int) (*LocksResponse, error) {
@@ -358,31 +427,6 @@ func (c *TTLockClient) ListLocks(pageNo, pageSize int, groupID int, alias string
 	return &locksResp, nil
 }
 
-func (c *TTLockClient) LockControl(lockID int, action string) error {
-	url := fmt.Sprintf("%s/lock/control", baseURL)
-
-	data := map[string]interface{}{
-		"clientId":    clientID,
-		"accessToken": c.AccessToken,
-		"lockId":      lockID,
-		"controlType": action,
-		"date":        time.Now().Unix(),
-	}
-
-	jsonData, _ := json.Marshal(data)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
 func (c *TTLockClient) doRequest(method, urlStr string, params url.Values) ([]byte, error) {
 	if time.Now().After(c.ExpiresAt) {
 		if err := c.refreshToken(); err != nil {
@@ -454,30 +498,33 @@ func (c *TTLockClient) GetLockRecords(lockID int, startDate, endDate int64) (*Lo
 }
 
 func (c *TTLockClient) ConfigurePassageMode(lockID int, passageMode int, configType int) error {
-	if time.Now().After(c.ExpiresAt) {
-		if err := c.refreshToken(); err != nil {
-			return fmt.Errorf("token refresh failed: %w", err)
-		}
+	//if time.Now().After(c.ExpiresAt) {
+	//	if err := c.refreshToken(); err != nil {
+	//		return fmt.Errorf("token refresh failed: %w", err)
+	//	}
+	//}
+	payload := fmt.Sprintf(
+		"clientId=%s&accessToken=%s&pageNo=%s&pageSize=%s&date=%s",
+		clientID,
+		c.AccessToken,
+		strconv.Itoa(passageMode),
+		strconv.Itoa(lockID),
+		strconv.Itoa(configType),
+		strconv.FormatInt(time.Now().UnixMilli(), 10),
+	)
+	req, err := http.NewRequest(
+		"POST",
+		baseURL+"/lock/configurePassageMode",
+		strings.NewReader(payload),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	data := url.Values{}
-	data.Set("clientId", clientID)
-	data.Set("accessToken", c.AccessToken)
-	data.Set("lockId", strconv.Itoa(lockID))
-	data.Set("passageMode", strconv.Itoa(passageMode))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	//if cyclicConfig != "" {
-	//	data.Set("cyclicConfig", cyclicConfig)
-	//}
-	//
-	//if autoUnlock > 0 {
-	//	data.Set("autoUnlock", strconv.Itoa(autoUnlock))
-	//}
-
-	data.Set("type", strconv.Itoa(configType))
-	data.Set("date", strconv.FormatInt(time.Now().UnixMilli(), 10))
-
-	resp, err := http.PostForm(baseURL+"/lock/configurePassageMode", data)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

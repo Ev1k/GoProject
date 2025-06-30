@@ -72,13 +72,16 @@ func main() {
 	//http.HandleFunc("/ttlock/callback", handlers.TTLockCallbackHandler)
 	http.HandleFunc("/api/register", handlers.RegisterAPIHandler)
 	http.HandleFunc("/api/login", handlers.LoginAPIHandler)
-	//http.HandleFunc("/api/ttlock/locks", handlers.LocksHandler)
 	http.HandleFunc("/api/ttlock/control", handlers.TTLockControlHandler)
 	http.HandleFunc("/records/", handlers.RecordsHandler)
 	http.HandleFunc("/ekey", handlers.EKeyHandler)
 	http.HandleFunc("/key-period", handlers.KeyPeriodHandler)
 	http.HandleFunc("/freeze-key", handlers.FreezeKeyHandler)
 	http.HandleFunc("/keys", handlers.KeysHandler)
+	http.HandleFunc("/api/ttlock/auth", handlers.TTLockAuthHandler)
+	http.HandleFunc("/ttlock/auth", handlers.TTLockAuthGetHandler)
+	http.HandleFunc("/initLock", handlers.InitLockHandler)
+	http.HandleFunc("/api/ttlock/initialize", handlers.InitLockAPIHandler)
 
 	_, err = os.Stat("templates")
 	if os.IsNotExist(err) {
@@ -103,6 +106,8 @@ func main() {
 	checkTemplate("freeze_key.html")
 	checkTemplate("keys.html")
 	checkTemplate("records.html")
+	checkTemplate("ttlock_auth.html")
+	checkTemplate("init_lock.html")
 	tmpl.Funcs(template.FuncMap{
 		"formatUnix": FormatUnix,
 	})

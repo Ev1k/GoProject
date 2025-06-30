@@ -85,7 +85,7 @@ func setTokenCookie(w http.ResponseWriter, token string) {
 }
 
 func validateRegistration(req RegistrationRequest) error {
-	log.Printf("Validating: %+v", req) // Добавьте логирование
+	log.Printf("Validating: %+v", req)
 	if req.Name == "" {
 		return errors.New("name is required")
 	}
@@ -262,6 +262,84 @@ func LoginAPIHandler(w http.ResponseWriter, r *http.Request) {
 			"email": user.Email,
 			"role":  user.Role,
 		},
+	})
+}
+
+func TTLockAuthGetHandler(w http.ResponseWriter, r *http.Request) {
+	tmpl.ExecuteTemplate(w, "ttlock_auth.html", nil)
+	return
+}
+
+func TTLockAuthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var creds struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"message": "Invalid request data",
+		})
+		return
+	}
+
+	cookie, err := r.Cookie("token")
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, map[string]interface{}{
+			"success": false,
+			"message": "Authentication required",
+		})
+		return
+	}
+
+	claims := &models.Claims{}
+	_, err = jwt.ParseWithClaims(cookie.Value, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, map[string]interface{}{
+			"success": false,
+			"message": "Invalid token",
+		})
+		return
+	}
+
+	ttClient := ttlock.NewClient()
+	tokens, err := ttClient.Authenticate(creds.Username, creds.Password)
+	if err != nil {
+		log.Printf("TTLock authentication failed: %v", err)
+		respondWithJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"message": "Authentication failed. Please check your credentials.",
+		})
+		return
+	}
+
+	err = db.SaveAccessToken(claims.UserID, tokens.AccessToken)
+	if err != nil {
+		log.Printf("Failed to save access token: %v", err)
+		respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false,
+			"message": "Server error",
+		})
+		return
+	}
+
+	err = db.SaveRefreshToken(claims.UserID, tokens.RefreshToken)
+	if err != nil {
+		log.Printf("Failed to save refresh token: %v", err)
+	}
+
+	err = db.SaveTTLockUsername(claims.UserID, creds.Username)
+	if err != nil {
+		log.Printf("Failed to save TTLock username: %v", err)
+	}
+
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Account linked successfully",
 	})
 }
 
