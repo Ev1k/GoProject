@@ -1,18 +1,22 @@
 package ttlock
 
 import (
+	"GoProject/db"
 	"bytes"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// Константы, которые могут быть определены на этапе компиляции
 const (
 	baseURL = "https://euapi.ttlock.com/v3"
 )
@@ -23,8 +27,12 @@ var (
 )
 
 func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("No .env file found")
+	}
 	clientID = os.Getenv("CLIENT_ID")
 	clientSecret = os.Getenv("CLIENT_SECRET")
+	fmt.Println(clientID, clientSecret)
 	//fmt.Printf(clientID, clientSecret)
 	//if clientID == "" || clientSecret == "" {
 	//	panic("CLIENT_ID and CLIENT_SECRET must be set in environment variables")
@@ -45,6 +53,26 @@ type TTLockClient struct {
 	UID          int
 }
 
+type LockRecordsResponse struct {
+	List     []LockRecord `json:"list"`
+	PageNo   int          `json:"pageNo"`
+	PageSize int          `json:"pageSize"`
+	Pages    int          `json:"pages"`
+	Total    int          `json:"total"`
+}
+
+type LockRecord struct {
+	RecordID           int64  `json:"recordId"`
+	LockID             int    `json:"lockId"`
+	RecordTypeFromLock int    `json:"recordTypeFromLock"`
+	RecordType         int    `json:"recordType"`
+	Success            int    `json:"success"`
+	Username           string `json:"username"`
+	KeyboardPwd        string `json:"keyboardPwd"`
+	LockDate           int64  `json:"lockDate"`
+	ServerDate         int64  `json:"serverDate"`
+}
+
 type Lock struct {
 	ID           int    `json:"lockId"`
 	Name         string `json:"lockName"`
@@ -57,6 +85,7 @@ type Lock struct {
 	GroupID      int    `json:"groupId"`
 	GroupName    string `json:"groupName"`
 	InitDate     int64  `json:"date"`
+	Status       string `json:"-"` // Поле для статуса, не приходит из API
 }
 
 type LocksResponse struct {
@@ -91,32 +120,81 @@ type KeysResponse struct {
 	Total    int   `json:"total"`
 }
 
+type PassageModeConfig struct {
+	PassageMode  int            `json:"passageMode"`
+	CyclicConfig []CyclicConfig `json:"cyclicConfig"`
+	AutoUnlock   int            `json:"autoUnlock"`
+}
+
+type CyclicConfig struct {
+	IsAllDay  int   `json:"isAllDay"`
+	StartTime int   `json:"startTime,omitempty"`
+	EndTime   int   `json:"endTime,omitempty"`
+	WeekDays  []int `json:"weekDays,omitempty"`
+}
+
 func NewClient() *TTLockClient {
 	return &TTLockClient{}
 }
 
 func (c *TTLockClient) RegisterUser(username, password string) (string, error) {
 	hashedPassword := fmt.Sprintf("%x", md5.Sum([]byte(password)))
+	log.Printf("Registering user with username: %s, hashed password: %s", username, hashedPassword)
 
-	data := url.Values{}
-	data.Set("clientId", clientID)
-	data.Set("clientSecret", clientSecret)
-	data.Set("username", username)
-	data.Set("password", hashedPassword)
-	data.Set("date", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	//data := url.Values{}
+	//data.Set("clientId", clientID)
+	//data.Set("clientSecret", clientSecret)
+	//data.Set("username", username)
+	//data.Set("password", hashedPassword)
+	//data.Set("date", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	//// Создаем буфер для тела запроса
+	//body := strings.NewReader(data.Encode())
 
-	resp, err := http.PostForm(baseURL+"/user/register", data)
+	payload := fmt.Sprintf(
+		"clientId=%s&clientSecret=%s&username=%s&password=%s&date=%d",
+		clientID,
+		clientSecret,
+		username,
+		hashedPassword,
+		time.Now().UnixMilli(),
+	)
+	//log.Printf("Escaped ClientID: %s", url.QueryEscape(clientID))
+	//log.Printf("Escaped ClientSecret: %s", url.QueryEscape(clientSecret))
+	log.Printf("Request payload: %s", payload)
+
+	// Создаем запрос
+	req, err := http.NewRequest(
+		"POST",
+		baseURL+"/user/register",
+		strings.NewReader(payload),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	log.Printf("Response Status: %d", resp.StatusCode)
+	log.Printf("Response Body: %s", string(responseBody))
 
 	if resp.StatusCode != http.StatusOK {
 		var errorResp struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
+		if err := json.Unmarshal(responseBody, &errorResp); err != nil {
 			return "", fmt.Errorf("failed to decode error response: %w", err)
 		}
 		return "", fmt.Errorf("TTLock API error %d: %s", errorResp.ErrCode, errorResp.ErrMsg)
@@ -125,8 +203,16 @@ func (c *TTLockClient) RegisterUser(username, password string) (string, error) {
 	var result struct {
 		Username string `json:"username"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		username := strings.TrimSpace(string(responseBody))
+		if username == "" {
+			return "", fmt.Errorf("empty username in response")
+		}
+		return username, nil
+	}
+
+	if result.Username == "" {
+		return "", fmt.Errorf("empty username in JSON response")
 	}
 
 	return result.Username, nil
@@ -134,17 +220,20 @@ func (c *TTLockClient) RegisterUser(username, password string) (string, error) {
 
 func (c *TTLockClient) Authenticate(username, password string) (*TokenResponse, error) {
 	hashedPassword := fmt.Sprintf("%x", md5.Sum([]byte(password)))
+	log.Printf("Authenticating user: %s", username)
 
-	data := url.Values{}
-	data.Set("clientId", clientID)
-	data.Set("clientSecret", clientSecret)
-	data.Set("username", username)
-	data.Set("password", hashedPassword)
+	payload := fmt.Sprintf(
+		"clientId=%s&clientSecret=%s&username=%s&password=%s",
+		clientID,
+		clientSecret,
+		username,
+		hashedPassword,
+	)
 
 	req, err := http.NewRequest(
 		"POST",
-		baseURL+"/oauth2/token",
-		bytes.NewBufferString(data.Encode()),
+		"https://euapi.ttlock.com/oauth2/token",
+		strings.NewReader(payload),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -159,20 +248,33 @@ func (c *TTLockClient) Authenticate(username, password string) (*TokenResponse, 
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	log.Printf("Auth response status: %d, body: %s", resp.StatusCode, string(body))
+
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		return nil, fmt.Errorf("unexpected content type: %s, body: %s", contentType, string(body))
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		var errorResp struct {
+		var apiError struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
-			return nil, fmt.Errorf("failed to decode error response: %w", err)
+		if err := json.Unmarshal(body, &apiError); err != nil {
+			return nil, fmt.Errorf("failed to parse error response (status %d): %w, body: %s",
+				resp.StatusCode, err, string(body))
 		}
-		return nil, fmt.Errorf("TTLock API error %d: %s", errorResp.ErrCode, errorResp.ErrMsg)
+		return nil, fmt.Errorf("API error %d: %s", apiError.ErrCode, apiError.ErrMsg)
 	}
 
 	var tokenResp TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w, body: %s", err, string(body))
 	}
 
 	c.AccessToken = tokenResp.AccessToken
@@ -180,52 +282,77 @@ func (c *TTLockClient) Authenticate(username, password string) (*TokenResponse, 
 	c.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 	c.UID = tokenResp.UID
 
+	log.Printf("Successfully authenticated user: %s", username)
 	return &tokenResp, nil
 }
 
-func (c *TTLockClient) ListLocks(pageNo, pageSize int, groupID int, alias string) (*LocksResponse, error) {
-	if time.Now().After(c.ExpiresAt) {
-		if err := c.refreshToken(); err != nil {
-			return nil, fmt.Errorf("token refresh failed: %w", err)
-		}
+func (c *TTLockClient) ListLocks(pageNo, pageSize int, groupID int, alias string, userId int) (*LocksResponse, error) {
+	user, err := db.GetUserByID(userId)
+	fmt.Println(user.ID, user.Name, user.AccessToken)
+	//if time.Now().After(c.ExpiresAt) {
+	//	err := c.refreshToken()
+	//	if err != nil {
+	//		return nil, fmt.Errorf("token refresh failed: %w", err)
+	//	}
+	//}
+
+	payload := fmt.Sprintf(
+		"clientId=%s&accessToken=%s&pageNo=%s&pageSize=%s&date=%s",
+		clientID,
+		user.AccessToken,
+		strconv.Itoa(pageNo),
+		strconv.Itoa(pageSize),
+		strconv.FormatInt(time.Now().UnixMilli(), 10),
+	)
+
+	urlStr := fmt.Sprintf("%s/lock/list?%s", baseURL, payload)
+	log.Printf("Request URL: %s", urlStr)
+
+	req, err := http.NewRequest(
+		"GET",
+		urlStr,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	params := url.Values{}
-	params.Add("clientId", clientID)
-	params.Add("accessToken", c.AccessToken)
-	params.Add("pageNo", strconv.Itoa(pageNo))
-	params.Add("pageSize", strconv.Itoa(pageSize))
-	params.Add("date", strconv.FormatInt(time.Now().UnixMilli(), 10))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	if groupID != 0 {
-		params.Add("groupId", strconv.Itoa(groupID))
-	}
-	if alias != "" {
-		params.Add("lockAlias", alias)
-	}
-
-	url := fmt.Sprintf("%s/v3/lock/list?%s", baseURL, params.Encode())
-
-	resp, err := http.Get(url)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	log.Printf("Auth response status: %d, body: %s", resp.StatusCode, string(body))
+
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		return nil, fmt.Errorf("unexpected content type: %s, body: %s", contentType, string(body))
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		var errorResp struct {
+		var apiError struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
-			return nil, fmt.Errorf("failed to decode error response: %w", err)
+		if err := json.Unmarshal(body, &apiError); err != nil {
+			return nil, fmt.Errorf("failed to parse error response (status %d): %w, body: %s",
+				resp.StatusCode, err, string(body))
 		}
-		return nil, fmt.Errorf("TTLock API error %d: %s", errorResp.ErrCode, errorResp.ErrMsg)
+		return nil, fmt.Errorf("API error %d: %s", apiError.ErrCode, apiError.ErrMsg)
 	}
 
 	var locksResp LocksResponse
-	if err := json.NewDecoder(resp.Body).Decode(&locksResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := json.Unmarshal(body, &locksResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w, body: %s", err, string(body))
 	}
 
 	return &locksResp, nil
@@ -254,6 +381,160 @@ func (c *TTLockClient) LockControl(lockID int, action string) error {
 	}
 
 	return nil
+}
+
+func (c *TTLockClient) doRequest(method, urlStr string, params url.Values) ([]byte, error) {
+	if time.Now().After(c.ExpiresAt) {
+		if err := c.refreshToken(); err != nil {
+			return nil, fmt.Errorf("token refresh failed: %w", err)
+		}
+	}
+
+	fullURL := fmt.Sprintf("%s?%s", urlStr, params.Encode())
+
+	req, err := http.NewRequest(method, fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
+			return nil, fmt.Errorf("failed to decode error response: %w", err)
+		}
+		return nil, fmt.Errorf("TTLock API error %d: %s", errorResp.ErrCode, errorResp.ErrMsg)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return body, nil
+}
+
+func (c *TTLockClient) GetLockRecords(lockID int, startDate, endDate int64) (*LockRecordsResponse, error) {
+	params := url.Values{}
+	params.Set("clientId", clientID)
+	params.Set("accessToken", c.AccessToken)
+	params.Set("lockId", strconv.Itoa(lockID))
+	params.Set("pageNo", "1")
+	params.Set("pageSize", "200")
+	params.Set("date", strconv.FormatInt(time.Now().Unix()*1000, 10))
+
+	if startDate > 0 {
+		params.Set("startDate", strconv.FormatInt(startDate, 10))
+	}
+	if endDate > 0 {
+		params.Set("endDate", strconv.FormatInt(endDate, 10))
+	}
+
+	urlStr := fmt.Sprintf("%s/lockRecord/list", baseURL)
+	respBody, err := c.doRequest("GET", urlStr, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get lock records: %w", err)
+	}
+
+	var result LockRecordsResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal lock records: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *TTLockClient) ConfigurePassageMode(lockID int, passageMode int, configType int) error {
+	if time.Now().After(c.ExpiresAt) {
+		if err := c.refreshToken(); err != nil {
+			return fmt.Errorf("token refresh failed: %w", err)
+		}
+	}
+
+	data := url.Values{}
+	data.Set("clientId", clientID)
+	data.Set("accessToken", c.AccessToken)
+	data.Set("lockId", strconv.Itoa(lockID))
+	data.Set("passageMode", strconv.Itoa(passageMode))
+
+	//if cyclicConfig != "" {
+	//	data.Set("cyclicConfig", cyclicConfig)
+	//}
+	//
+	//if autoUnlock > 0 {
+	//	data.Set("autoUnlock", strconv.Itoa(autoUnlock))
+	//}
+
+	data.Set("type", strconv.Itoa(configType))
+	data.Set("date", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	resp, err := http.PostForm(baseURL+"/lock/configurePassageMode", data)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if result.ErrCode != 0 {
+		return fmt.Errorf("TTLock API error %d: %s", result.ErrCode, result.ErrMsg)
+	}
+
+	return nil
+}
+
+func (c *TTLockClient) GetPassageMode(lockID int) (*PassageModeConfig, error) {
+	if time.Now().After(c.ExpiresAt) {
+		if err := c.refreshToken(); err != nil {
+			return nil, fmt.Errorf("token refresh failed: %w", err)
+		}
+	}
+
+	params := url.Values{}
+	params.Set("clientId", clientID)
+	params.Set("accessToken", c.AccessToken)
+	params.Set("lockId", strconv.Itoa(lockID))
+	params.Set("date", strconv.FormatInt(time.Now().UnixMilli(), 10))
+
+	urlStr := fmt.Sprintf("%s/lock/getPassageModeConfiguration?%s", baseURL, params.Encode())
+	resp, err := http.Get(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp struct {
+			ErrCode int    `json:"errcode"`
+			ErrMsg  string `json:"errmsg"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
+			return nil, fmt.Errorf("failed to decode error response: %w", err)
+		}
+		return nil, fmt.Errorf("TTLock API error %d: %s", errorResp.ErrCode, errorResp.ErrMsg)
+	}
+
+	var config PassageModeConfig
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &config, nil
 }
 
 func (c *TTLockClient) refreshToken() error {

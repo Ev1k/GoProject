@@ -16,6 +16,8 @@ type User struct {
 	Password       string `json:"password"`
 	TTLockUsername string `json:"ttlock_username"`
 	Role           Role   `json:"role"`
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token"`
 }
 
 type Claims struct {

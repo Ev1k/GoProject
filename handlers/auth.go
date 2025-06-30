@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -143,6 +144,7 @@ func RegisterAPIHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = models.RoleUser
 	}
+
 	user := models.User{
 		Name:     req.Name,
 		Email:    req.Email,
@@ -150,7 +152,8 @@ func RegisterAPIHandler(w http.ResponseWriter, r *http.Request) {
 		Role:     req.Role,
 	}
 
-	if err := db.CreateUser(user); err != nil {
+	userId, err := db.CreateUser(user)
+	if err != nil {
 		if err.Error() == "pq: duplicate key value violates unique constraint" {
 			respondWithError(w, http.StatusBadRequest, "Email already exists")
 			return
@@ -160,25 +163,29 @@ func RegisterAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ttlockClient := ttlock.NewClient()
-
-	ttUsername := strings.ToLower(strings.ReplaceAll(req.Email, "@", "_"))
-	ttUsername = regexp.MustCompile(`[^a-z0-9_]`).ReplaceAllString(ttUsername, "")
-
+	ttUsername := strings.ToLower(strings.ReplaceAll(req.Email, "@", ""))
+	ttUsername = regexp.MustCompile(`[^a-z0-9]`).ReplaceAllString(ttUsername, "")
 	ttPassword := req.Password
 
+	log.Printf("Registering in TTLock with username: %s", ttUsername)
 	registeredUsername, err := ttlockClient.RegisterUser(ttUsername, ttPassword)
 	if err != nil {
 		log.Printf("TTLock registration failed: %v", err)
-	} else {
-		log.Printf("User registered in TTLock with username: %s", registeredUsername)
-		if err := db.SaveTTLockUsername(user.ID, registeredUsername); err != nil {
-			log.Printf("Failed to save TTLock username: %v", err)
-		}
+		respondWithError(w, http.StatusInternalServerError, "Failed to register in TTLock service")
+		return
 	}
 
+	log.Printf("Successfully registered in TTLock with username: %s", registeredUsername)
+	if err := db.SaveTTLockUsername(userId, registeredUsername); err != nil {
+		log.Printf("Failed to save TTLock username: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "User created but failed to save TTLock username")
+		return
+	}
+	fmt.Println(userId, registeredUsername, user.TTLockUsername)
 	respondWithJSON(w, http.StatusCreated, map[string]string{
-		"message": "User registered successfully",
-		"role":    string(user.Role),
+		"message":         "User registered successfully",
+		"role":            string(user.Role),
+		"ttlock_username": registeredUsername,
 	})
 }
 
@@ -221,19 +228,31 @@ func LoginAPIHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to get TTLock username: %v", err)
 		respondWithJSON(w, http.StatusOK, map[string]interface{}{
-			"success":  true,
+			"success":  false,
 			"redirect": "/",
 		})
 		return
 	}
 
 	ttClient := ttlock.NewClient()
-	_, err = ttClient.Authenticate(ttlockUsername, creds.Password)
+
+	tokens, err := ttClient.Authenticate(ttlockUsername, creds.Password)
+	//if err != nil {
+	//	log.Printf("TTLock authentication failed: %v", err)
+	//} else {
+	//	log.Printf("Successfully authenticated with TTLock")
+	//}
+
+	err = db.SaveAccessToken(user.ID, tokens.AccessToken)
 	if err != nil {
-		log.Printf("TTLock authentication failed: %v", err)
-	} else {
-		log.Printf("Successfully authenticated with TTLock")
+		log.Printf("Failed to save TTLock access token: %v", err)
 	}
+	err = db.SaveRefreshToken(user.ID, tokens.RefreshToken)
+	if err != nil {
+		log.Printf("Failed to save TTLock refresh token: %v", err)
+	}
+
+	log.Printf("Successfully authenticated with TTLock for user %d", user.ID)
 
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"success":  true,

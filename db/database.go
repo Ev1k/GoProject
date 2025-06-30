@@ -45,6 +45,8 @@ func createTable() {
 	ttlock_username VARCHAR(200) DEFAULT NULL,
     role VARCHAR(10) NOT NULL DEFAULT 'user',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	access_token VARCHAR(200),
+	refresh_token VARCHAR(200),
     CHECK (role IN ('admin', 'user'))
 	);
 	`
@@ -59,7 +61,7 @@ func CloseDB() {
 	DB.Close()
 }
 
-func CreateUser(user models.User) error {
+func CreateUser(user models.User) (int, error) {
 	query := `
     INSERT INTO users (name, email, password, role) 
     VALUES ($1, $2, $3, $4)
@@ -75,10 +77,25 @@ func CreateUser(user models.User) error {
 
 	if err != nil {
 		log.Printf("DB error: %v", err) // Добавьте эту строку
-		return err
+		return id, err
 	}
 
-	return nil
+	return id, nil
+}
+
+func GetUserByID(id int) (models.User, error) {
+	var user models.User
+	query := `SELECT id, name, email, password, role, access_token, refresh_token FROM users WHERE id = $1`
+	err := DB.QueryRow(query, id).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Email,
+		&user.Password,
+		&user.Role,
+		&user.AccessToken,
+		&user.RefreshToken,
+	)
+	return user, err
 }
 
 func GetUserByEmail(email string) (models.User, error) {
@@ -120,6 +137,24 @@ func SaveTTLockUsername(userID int, ttlockUsername string) error {
 	_, err := DB.Exec(
 		"UPDATE users SET ttlock_username = $1 WHERE id = $2",
 		ttlockUsername,
+		userID,
+	)
+	return err
+}
+
+func SaveAccessToken(userID int, token string) error {
+	_, err := DB.Exec(
+		"UPDATE users SET access_token = $1 WHERE id = $2",
+		token,
+		userID,
+	)
+	return err
+}
+
+func SaveRefreshToken(userID int, token string) error {
+	_, err := DB.Exec(
+		"UPDATE users SET refresh_token = $1 WHERE id = $2",
+		token,
 		userID,
 	)
 	return err

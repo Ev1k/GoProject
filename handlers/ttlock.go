@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,10 +28,8 @@ func InitTTLockClient() {
 }
 
 func LocksHandler(w http.ResponseWriter, r *http.Request) {
-	// ttlock_username не получается
 	cookie, err := r.Cookie("token")
 	if err != nil {
-		//fmt.Println(err)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -48,11 +47,26 @@ func LocksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ttClient := ttlock.NewClient()
-	locks, err := ttClient.ListLocks(1, 20, 0, "") // pageNo=1, pageSize=20, без фильтров
+	locks, err := ttClient.ListLocks(1, 20, 0, "", claims.UserID) // без фильтров
 	if err != nil {
 		log.Printf("Failed to get locks: %v", err)
 		http.Error(w, "Failed to get locks", http.StatusInternalServerError)
 		return
+	}
+
+	for i := range locks.List {
+		config, err := ttClient.GetPassageMode(locks.List[i].ID)
+		if err != nil {
+			log.Printf("Failed to get passage mode for lock %d: %v", locks.List[i].ID, err)
+			locks.List[i].Status = "Неизвестно"
+			continue
+		}
+
+		if config.PassageMode == 1 {
+			locks.List[i].Status = "Открыт"
+		} else {
+			locks.List[i].Status = "Закрыт"
+		}
 	}
 
 	err = tmpl.ExecuteTemplate(w, "locks.html", map[string]interface{}{
@@ -75,12 +89,85 @@ func TTLockControlHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ttlockClient.LockControl(req.LockID, req.Action); err != nil {
+	ttClient := ttlock.NewClient()
+
+	passageMode := 1
+	if req.Action == "2" {
+		passageMode = 2
+	}
+
+	//cyclicConfig := `{"isAllDay":1}` // Весь день
+	//autoUnlock := 1                  // Автоматическое открытие
+
+	err := ttClient.ConfigurePassageMode(req.LockID, passageMode, 2)
+	if err != nil {
+		log.Printf("Failed to control lock: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"success"}`))
+}
+
+func RecordsHandler(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("token")
+	if err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	claims := &models.Claims{}
+	token, err := jwt.ParseWithClaims(cookie.Value, claims, func(token *jwt.Token) (interface{}, error) {
+		secret := os.Getenv("JWT_SECRET")
+		return []byte(secret), nil
+	})
+
+	if err != nil || !token.Valid {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	lockIDStr := strings.TrimPrefix(r.URL.Path, "/records/")
+	lockID, err := strconv.Atoi(lockIDStr)
+	if err != nil {
+		http.Error(w, "Invalid lock ID", http.StatusBadRequest)
+		return
+	}
+
+	startDate := r.URL.Query().Get("startDate")
+	endDate := r.URL.Query().Get("endDate")
+
+	var startTimestamp, endTimestamp int64
+	if startDate != "" {
+		t, err := time.Parse("2006-01-02", startDate)
+		if err == nil {
+			startTimestamp = t.Unix() * 1000
+		}
+	}
+	if endDate != "" {
+		t, err := time.Parse("2006-01-02", endDate)
+		if err == nil {
+			endTimestamp = t.Unix() * 1000
+		}
+	}
+
+	ttClient := ttlock.NewClient()
+	records, err := ttClient.GetLockRecords(lockID, startTimestamp, endTimestamp)
+	if err != nil {
+		log.Printf("Failed to get lock records: %v", err)
+		http.Error(w, "Failed to get lock records", http.StatusInternalServerError)
+		return
+	}
+
+	err = tmpl.ExecuteTemplate(w, "records.html", map[string]interface{}{
+		"LockID":  lockID,
+		"Records": records.List,
+	})
+	if err != nil {
+		log.Printf("Failed to render records page: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func EKeyHandler(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +377,6 @@ func KeysHandler(w http.ResponseWriter, r *http.Request) {
 		//	keysResp.List[i].Date = keysResp.List[i].Date / 1000
 		//}
 
-		// Конвертация timestamp из миллисекунд в секунды
 		for i := range keysResp.List {
 			if keysResp.List[i].StartDate > 0 {
 				keysResp.List[i].StartDate = keysResp.List[i].StartDate / 1000

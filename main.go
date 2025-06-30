@@ -15,6 +15,21 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func getRecordType(recordType int) string {
+	types := map[int]string{
+		-5: "Face",
+		-4: "QR code",
+		4:  "Keyboard password",
+		7:  "IC card",
+		8:  "Fingerprint",
+		55: "Remote",
+	}
+	if name, ok := types[recordType]; ok {
+		return name
+	}
+	return fmt.Sprintf("Unknown (%d)", recordType)
+}
+
 // Функция для форматирования Unix времени
 func FormatUnix(t int64) string {
 	if t == 0 {
@@ -34,7 +49,8 @@ func main() {
 	defer db.CloseDB()
 
 	tmpl := template.New("").Funcs(template.FuncMap{
-		"formatUnix": FormatUnix, // регистр важен - должен соответствовать вызову в шаблоне
+		"formatUnix":    FormatUnix,
+		"getRecordType": getRecordType,
 	})
 
 	_, err = tmpl.ParseGlob("templates/*.html")
@@ -56,14 +72,14 @@ func main() {
 	//http.HandleFunc("/ttlock/callback", handlers.TTLockCallbackHandler)
 	http.HandleFunc("/api/register", handlers.RegisterAPIHandler)
 	http.HandleFunc("/api/login", handlers.LoginAPIHandler)
-	http.HandleFunc("/api/ttlock/locks", handlers.LocksHandler)
+	//http.HandleFunc("/api/ttlock/locks", handlers.LocksHandler)
 	http.HandleFunc("/api/ttlock/control", handlers.TTLockControlHandler)
+	http.HandleFunc("/records/", handlers.RecordsHandler)
 	http.HandleFunc("/ekey", handlers.EKeyHandler)
 	http.HandleFunc("/key-period", handlers.KeyPeriodHandler)
 	http.HandleFunc("/freeze-key", handlers.FreezeKeyHandler)
 	http.HandleFunc("/keys", handlers.KeysHandler)
 
-	// Проверка шаблонов
 	_, err = os.Stat("templates")
 	if os.IsNotExist(err) {
 		log.Fatal("Templates directory not found")
@@ -86,6 +102,7 @@ func main() {
 	checkTemplate("key_period.html")
 	checkTemplate("freeze_key.html")
 	checkTemplate("keys.html")
+	checkTemplate("records.html")
 	tmpl.Funcs(template.FuncMap{
 		"formatUnix": FormatUnix,
 	})
