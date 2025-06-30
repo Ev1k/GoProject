@@ -17,6 +17,7 @@
             margin: 0 auto;
         }
     </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body class="text-center">
 <div class="container">
@@ -29,6 +30,9 @@
             </div>
             <div class="card-body">
                 <p>You are successfully logged in!</p>
+                <button id="logoutBtn" class="btn btn-danger btn-sm">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </button>
             </div>
         </div>
     </div>
@@ -91,6 +95,35 @@
         $(document).ready(function() {
             $('#connectTTLock').click(function() {
                 window.location.href = '/ttlock/auth';
+            });
+
+            $(document).on('click', '#logoutBtn', function(e) {
+                e.preventDefault();
+
+                $(this).html('<i class="fas fa-spinner fa-spin"></i> Logging out...');
+
+                fetch('/api/logout', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                })
+                    .then(response => {
+                        if (response.ok) {
+                            window.location.href = '/login';
+                        } else {
+                            console.error('Logout failed with status:', response.status);
+                            $('#logoutBtn').html('<i class="fas fa-sign-out-alt"></i> Logout');
+                            alert('Logout failed. Please try again.');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Logout error:', error);
+                        $('#logoutBtn').html('<i class="fas fa-sign-out-alt"></i> Logout');
+                        alert('Logout failed. Please check your connection.');
+                    });
             });
 
             function loadLocks() {

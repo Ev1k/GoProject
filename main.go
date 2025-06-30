@@ -82,6 +82,7 @@ func main() {
 	http.HandleFunc("/ttlock/auth", handlers.TTLockAuthGetHandler)
 	http.HandleFunc("/initLock", handlers.InitLockHandler)
 	http.HandleFunc("/api/ttlock/initialize", handlers.InitLockAPIHandler)
+	http.HandleFunc("/api/logout", handlers.LogoutHandler)
 
 	_, err = os.Stat("templates")
 	if os.IsNotExist(err) {

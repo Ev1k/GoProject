@@ -112,6 +112,10 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	if _, err := r.Cookie(tokenCookieName); err == nil {
+		http.Redirect(w, r, "/home", http.StatusSeeOther)
+		return
+	}
 	if r.Method == "GET" {
 		tmpl.ExecuteTemplate(w, "login.html", nil)
 		return
@@ -340,6 +344,15 @@ func TTLockAuthHandler(w http.ResponseWriter, r *http.Request) {
 	respondWithJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "Account linked successfully",
+	})
+}
+
+func LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	setTokenCookie(w, "")
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	respondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Logged out successfully",
 	})
 }
 
